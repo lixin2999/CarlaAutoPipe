@@ -4,4 +4,4 @@
 通过 subprocess 调用 CLI 并解析 JSON 报告（严格遵循详细设计 V1.4 §5.2）。
 """
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"

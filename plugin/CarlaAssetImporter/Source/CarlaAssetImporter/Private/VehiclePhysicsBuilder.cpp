@@ -61,6 +61,16 @@ UPhysicsAsset* UCarlaVehiclePhysicsBuilder::Build(USkeletalMesh* Mesh,
 				break;
 			}
 		}
+		// ★骨骼索引缺失必须失败：INDEX_NONE 会产生未绑定骨骼的碰撞体，导致
+		// “模型可见但无法驾驶/转向失效”，且后续配对校验无法感知。失败前释放
+		// RF_Standalone 资产避免常驻内存（V1.4 §4.3 内存安全）。
+		if (BaseIdx == INDEX_NONE)
+		{
+			UE_LOG(LogCarlaAssetImport, Error,
+				TEXT("Vehicle_Base bone not found in ref skeleton"));
+			Phys->MarkAsGarbage();
+			return nullptr;
+		}
 		UBodySetup* BodySetup = NewBodySetup(Phys, TEXT("BodySetup_Vehicle_Base"));
 		UConvexElem* Convex = NewObject<UConvexElem>(BodySetup, TEXT("ConvexBody"));
 		// 凸包顶点：以网格包围盒八角作为兜底几何（保存时 PhysX cook 会基于
@@ -95,6 +105,13 @@ UPhysicsAsset* UCarlaVehiclePhysicsBuilder::Build(USkeletalMesh* Mesh,
 				break;
 			}
 		}
+		if (BoneIdx == INDEX_NONE)   // ★同上：车轮骨骼缺失即失败，不静默 INDEX_NONE
+		{
+			UE_LOG(LogCarlaAssetImport, Error,
+				TEXT("Wheel bone not found in ref skeleton: %s"), Bone);
+			Phys->MarkAsGarbage();
+			return nullptr;
+		}
 		UBodySetup* WheelBody = NewBodySetup(Phys, FName(*FString::Printf(
 			TEXT("BodySetup_%s"), Bone)));
 		USphereElem* Sphere = NewObject<USphereElem>(WheelBody, TEXT("WheelSphere"));
@@ -113,6 +130,7 @@ UPhysicsAsset* UCarlaVehiclePhysicsBuilder::Build(USkeletalMesh* Mesh,
 		UE_LOG(LogCarlaAssetImport, Error,
 			TEXT("Physics assertion failed — bones without collision body: %s"),
 			*FString::Join(Missing, TEXT(", ")));
+		Phys->MarkAsGarbage();   // ★失败路径释放 RF_Standalone 资产，避免进程内常驻
 		return nullptr;
 	}
 

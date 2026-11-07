@@ -27,6 +27,10 @@ ENV_MAP = {
 }
 
 
+class SettingsError(RuntimeError):
+    """settings.json 损坏/非法，调用方映射退出码 3（ENVIRONMENT_ERROR）。"""
+
+
 @dataclass
 class Settings:
     """运行配置。路径统一以 POSIX 字符串保存，使用时再转 Path。"""
@@ -51,7 +55,13 @@ class Settings:
         path = Path(settings_path) if settings_path else DEFAULT_SETTINGS_FILE
         if path.is_file():
             import json
-            data = json.loads(path.read_text(encoding="utf-8"))
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as e:
+                raise SettingsError(
+                    f"settings.json 解析失败: {path.as_posix()} -> {e}；"
+                    "请对照 configs/settings.example.json 修正语法，"
+                    "或删除该文件回退默认配置") from e
             data.pop("$comment", None)
         # 相对路径按仓库根解析
         for key in ("manifest_dir", "report_dir", "package_dir", "backup_dir"):

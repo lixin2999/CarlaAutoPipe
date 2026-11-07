@@ -6,10 +6,10 @@ import sys
 
 from PyQt5.QtWidgets import QApplication
 
+from . import __version__ as APP_VERSION
 from .main_window import MainWindow
 
 APP_TITLE = "CARLA 资产自动化导入工具"
-APP_VERSION = "V1.0.0"
 
 
 def create_app(argv: list | None = None) -> QApplication:

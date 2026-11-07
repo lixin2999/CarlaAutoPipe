@@ -11,6 +11,76 @@
 
 ---
 
+## V1.0.1 — 2026-11-07（代码审查整改）
+
+依据《详细设计文档 V1.4》对全部代码完成专项审查（功能符合性 / 内存与边界异常 /
+并发与性能），本节为整改清单。全部整改附带新增回归用例，pytest 77 项全部通过。
+
+### 修复
+
+- **inject 幂等与回滚全通路闭环**（设计目标 5/§4.5）：
+  - pak 通路指纹由 `(文件名, "pak")` 占位修正为 **文件内容 SHA-256**，并前置幂等检查
+    （重复注入相同 pak 直接跳过，`--force` 可强制重注；包内容变更能被感知）；
+    记录与比对严格同源同算法，消除既往“指纹记录与比对不一致”同类缺陷；
+  - Linux ImportAssets.sh 通路补齐 **注入前快照备份 + 失败真回滚 + 成功后指纹记录**
+    （此前传 `None` 仅输出“无需回滚”误导信息，且从不记录指纹）；
+  - 逐文件指纹改为 **流式哈希**（复用 `checksum.file_sha256`，pack 侧同步），
+    消除大体积 .uasset 整文件读入内存的 OOM 风险。
+- **zip 解包路径穿越防护**：`read_package` 对 zip 条目增加与 tar.gz 同款的绝对路径/`..`
+    预检，恶意或损坏包不再能写出目标目录之外（报 `PKG_CORRUPT`，退出码 1）。
+- **smoke JUnit XML 真实落地**：`write_junit` 此前无任何调用点（V1.0.0 文档声称失实），
+    现每次冒烟自动产出 `reports/smoke.junit.xml` 并计入 artifacts；属性值全部 XML
+    转义，含引号/尖括号的诊断详情不再破坏 XML 合法性。
+- **smoke 参数透传**：地图冒烟 TrafficManager 探测改用 CLI 传入的 `--host/--port`，
+    非默认端口下 check03 不再必失败；探测 Client 补齐 10s 超时。
+- **validate 退出码一致性**：Blender 侧报告解析失败但退出码为 1 时，兜底补录 ERROR
+    并附 stderr 尾部，保证“存在 ERROR → 退出码 1”契约不留缺口。
+- **配置损坏可读化**：`settings.json` JSON 语法错误新增 `SettingsError`，CLI 映射为
+    退出码 3（`ENV_SETTINGS_INVALID`）并附修复指引，不再落入意外异常兜底报 2。
+- **Ctrl+C 语义修正**：KeyboardInterrupt 退出码由 2（引擎内部错误）改为 130（128+SIGINT 惯例）。
+- **Blender 校验边界**（validate_mesh.py）：空包围盒集、`wheels∉{2,4}`（单独调用时）
+    直接 ERROR 阻断，修复两轮车骨骼子集切片表达式 `[:declared-2+2]` 恒为全集的写法；
+    删除退化面检测中的死代码分支。
+- **冒烟资源回收**：车辆 check07 的 Lidar 传感器与 QueueSensor 登记统一由 `cleanup()`
+    销毁（异常路径不泄漏）；地图 check03 测试车辆 try/finally 销毁；check04 不再误销毁
+    环境已有行人，只销毁本次生成个体。
+
+### 完善
+
+- **GUI 注入二次确认改为真实差异清单**：新增 `gui/preview.py`（只读复用 CLI 核心函数
+    解包比对，不写目标、不破薄壳契约），预览不可用时明示原因，不再展示占位假数据。
+- **ImportAssets.sh 异常精细处理**：bash 缺失/启动失败 → 退出码 3（`ENV_BASH_MISSING`，
+    提示 Windows 运行机改用 zip 通路）；超时 → 退出码 2（`IMPORT_SH_TIMEOUT`）并回滚。
+- **窗口标题与版本号单一来源**：GUI 标题改读包版本（`gui.__version__`）。
+
+### 修复（UE 4.26 C++ 插件，需重新编译，见 DEPLOYMENT）
+
+- `TemplateHashGuard`：模板目录相对路径排序改为大小写敏感码点序（`FString::Sort` 默认
+  IgnoreCase），与 Python `checksum.py` 严格对齐，消除混合大小写文件名下哈希卡点误报
+  退出码 3 的风险；
+- `CarlaAssetImportCommandlet`：引擎侧 JSON 报告 `exit_code` 写入真实返回码 0/1/2/3
+  （此前恒为 HasErrors 推断的 0/1，GUI/CI 会把环境错误误读为校验失败）；
+- `MapImporter::WaitForSceneReady`：等待循环内显式 `ProcessAsyncLoading(true)` 泵送异步
+  加载管线（此前纯 Sleep 轮询无法推进加载，可能恒定超时退出码 2）；物理就绪检查由全局
+  `TObjectIterator` 收窄为 `FActorIterator` 限目标世界，消除大场景轮询性能开销；
+- `VehiclePhysicsBuilder`：骨骼索引 `INDEX_NONE`（车身/车轮骨骼未命中）时报错失败而非
+  静默生成未绑定碰撞体；失败路径 `MarkAsGarbage()` 释放 `RF_Standalone` 临时资产，
+  避免进程内常驻。
+
+### 已知限制（本次审查发现，需 UE 实机验证后排期，未在本版修改）
+
+- 地图管线缺关卡加载/保存环节：`MapImporter` 全程使用当前编辑器默认世界，地形
+  StaticMesh 所在包未显式保存（`LoadedWorld` 成员声明后未使用）；
+- `FbxImporter::ImportStaticMesh` 忽略 `bSimpleCollision` 参数，简模轨“自动简单碰撞/降精度”
+  未实际落地；
+- `GoldenTemplateCopier::SaveGeneratedAssets` 依赖全局 SaveDirtyPackages 而非显式保存
+  收集到的包列表，弱指针追踪与注释不符（插入 GC 时可能静默漏存）；
+- `FlushPendingRegistrations` 假设批内同一 VehicleFactory，多工厂混合批次仅编译首个；
+  `-batch-size` 分片 GC 在“单进程单资产”架构下仅对 BatchSize=1 生效；
+- C 轨“人工审核卡点”仅为流程约定（文档/报错指引），工具侧无强制拦截。
+
+---
+
 ## V1.0.0 — 2026-11-07（首个正式版本）
 
 依据《CARLA 车辆与地图资产自动化导入工具系统详细设计文档 V1.4》完成全量功能交付。

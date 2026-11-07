@@ -14,6 +14,7 @@ import json
 import time
 from pathlib import Path
 from typing import Dict, List, Optional
+from xml.sax.saxutils import quoteattr
 
 from .config import Settings
 from .constants import ExitCode
@@ -46,6 +47,8 @@ class VehicleChecks:
         self.manifest = manifest
         self.bp = None
         self.vehicle = None
+        self._sensors: List = []      # ★待销毁传感器登记（异常路径共用 cleanup 回收）
+        self._queues: List = []
 
     def _filter_id(self) -> str:
         return f"vehicle.{self.make}.{self.model}"
@@ -154,6 +157,7 @@ class VehicleChecks:
             return False, {"error": "车辆未生成"}
         hits = {"n": 0}
         q = self.c.QueueSensor(1)
+        self._queues.append(q)
 
         def _on_hit(h):
             hits["n"] += 1
@@ -162,10 +166,14 @@ class VehicleChecks:
         bp = self.world.get_blueprint_library().find("sensor.lidar.ray_cast")
         tf = self.c.Transform(self.c.Location(0, 0, 250), self.c.Rotation(0, 0, 0))
         lidar = self.world.spawn_actor(bp, tf, attach_to=self.vehicle)
+        self._sensors.append(lidar)          # ★登记统一销毁，异常路径不泄漏
         lidar.listen(_on_hit)
-        time.sleep(1.0)
-        lidar.stop()
+        try:
+            time.sleep(1.0)
+        finally:
+            lidar.stop()
         lidar.destroy()
+        self._sensors.remove(lidar)
         n = hits["n"]
         return n > 0, {"lidar_hits": n,
                        "note": "点云命中车身即碰撞体有效（官方雷达已过滤车辆自身时以>0判定）"}
@@ -178,6 +186,14 @@ class VehicleChecks:
         return ok, {"routes_model_attr": routes_style}
 
     def cleanup(self):
+        for s in list(self._sensors):
+            try:
+                s.stop()
+                s.destroy()
+            except Exception:                            # noqa: BLE001
+                pass
+        self._sensors.clear()
+        self._queues.clear()
         if self.vehicle is not None:
             try:
                 self.vehicle.destroy()
@@ -190,10 +206,13 @@ class VehicleChecks:
 # 单项检查实现（地图）
 # ---------------------------------------------------------------------------
 class MapChecks:
-    def __init__(self, carla_mod, client, map_name: str):
+    def __init__(self, carla_mod, client, map_name: str,
+                 host: str = HOST, port: int = PORT):
         self.c = carla_mod
         self.client = client
         self.map_name = map_name
+        self.host = host
+        self.port = port
         self.world = None
 
     def check01_load(self):
@@ -213,32 +232,42 @@ class MapChecks:
 
     def check03_vehicle_nav(self):
         self.client.set_traffic_manager_port(TM_PORT)
-        # 验证 TM 可达（不可用会抛异常→单项失败）
-        self.c.Client(HOST, PORT).get_trafficmanager(TM_PORT)
+        # 验证 TM 可达（不可用会抛异常→单项失败）；复用 CLI 传入的 host/port
+        probe = self.c.Client(self.host, self.port)
+        probe.set_timeout(10.0)
+        probe.get_trafficmanager(TM_PORT)
         bp = self.world.get_blueprint_library().filter("vehicle.*")[0]
         spawn = self.world.get_map().get_spawn_actors()[0]
         car = self.world.try_spawn_actor(bp, spawn)
         if car is None:
             return False, {"error": "TM 测试车辆生成失败"}
-        car.set_autopilot(True, TM_PORT)
-        time.sleep(2.0)
-        v = car.get_velocity()
-        moved = (v.x ** 2 + v.y ** 2) ** 0.5 > 0.1
-        car.destroy()
+        try:
+            car.set_autopilot(True, TM_PORT)
+            time.sleep(2.0)
+            v = car.get_velocity()
+            moved = (v.x ** 2 + v.y ** 2) ** 0.5 > 0.1
+        finally:
+            try:
+                car.destroy()               # ★异常路径也销毁测试车辆
+            except Exception:                # noqa: BLE001
+                pass
         return moved, {"autopilot_speed_mps": round((v.x ** 2 + v.y ** 2) ** 0.5, 2)}
 
     def check04_pedestrian_nav(self):
         walkers = self.world.get_actors().filter("walker.pedestrian.*")
+        spawned: List = []
         if not walkers:
             bps = self.world.get_blueprint_library().filter("walker.pedestrian.*")
             if not bps:
                 return False, {"error": "无行人蓝图"}
             spawns = self.world.get_map().get_spawn_actors()[:5]
             for sp in spawns:
-                self.world.try_spawn_actor(bps[0], sp)
+                w = self.world.try_spawn_actor(bps[0], sp)
+                if w is not None:
+                    spawned.append(w)
             walkers = self.world.get_actors().filter("walker.pedestrian.*")
         ok = len(walkers) > 0
-        for w in walkers:
+        for w in spawned:                    # ★只销毁本次生成的行人，不动环境已有
             try:
                 w.destroy()
             except Exception:                            # noqa: BLE001
@@ -330,7 +359,7 @@ def run_smoke(asset_type: str, name: str, batch_dir: Optional[str] = None,
         if asset_type == "vehicle":
             res = _smoke_vehicle(carla, world, tgt, rpt)
         else:
-            res = _smoke_map(carla, client, tgt, rpt)
+            res = _smoke_map(carla, client, tgt, rpt, host=host, port=port)
         results.append(res)
         all_pass = all_pass and res["passed"]
 
@@ -338,6 +367,10 @@ def run_smoke(asset_type: str, name: str, batch_dir: Optional[str] = None,
     rpt.asset_name = name
     if not results:
         rpt.add_warning("SMOKE_EMPTY", "没有可测试的目标", "检查 --name/--batch 输入")
+    # CI Stage 4 质量门禁：产出 JUnit XML（与 JSON 报告同名不强制，缺省 reports/ 下）
+    junit = write_junit(results, _default_junit_path(settings))
+    rpt.artifacts.append(junit.as_posix())
+    rpt.details["junit_xml"] = junit.as_posix()
     return rpt.finish(int(ExitCode.SUCCESS) if all_pass and results
                       else int(ExitCode.ASSET_VALIDATION_FAIL))
 
@@ -366,10 +399,11 @@ def _smoke_vehicle(carla, world, target: dict, rpt: Report) -> dict:
             "passed": all(i["passed"] for i in items), "items": items}
 
 
-def _smoke_map(carla, client, target: dict, rpt: Report) -> dict:
+def _smoke_map(carla, client, target: dict, rpt: Report,
+               host: str = HOST, port: int = PORT) -> dict:
     manifest = target.get("manifest") or {}
     map_name = (manifest.get("map") or {}).get("map_name") or target.get("name")
-    checker = MapChecks(carla, client, map_name)
+    checker = MapChecks(carla, client, map_name, host=host, port=port)
     items = []
     for key, label, fn in MAP_CHECKS:
         try:
@@ -385,16 +419,23 @@ def _smoke_map(carla, client, target: dict, rpt: Report) -> dict:
             "passed": all(i["passed"] for i in items), "items": items}
 
 
-def write_junit(results: List[dict], path: Path) -> None:
-    """CI 归档用 JUnit XML（Stage 4 质量门禁）。"""
+def _default_junit_path(settings: Settings) -> Path:
+    out_dir = settings.resolve(settings.report_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    return out_dir / "smoke.junit.xml"
+
+
+def write_junit(results: List[dict], path: Path) -> Path:
+    """CI 归档用 JUnit XML（Stage 4 质量门禁），属性值全部转义。"""
     cases = []
     for r in results:
         for i in r["items"]:
-            status = "" if i["passed"] else \
-                f'<failure message="{json.dumps(i["detail"], ensure_ascii=False)}"/>'
-            cases.append(f'  <testcase classname="smoke.{r["asset"]}" '
-                         f'name="{i["check"]}">{status}</testcase>')
+            status = "" if i["passed"] else (
+                f'<failure message={quoteattr(json.dumps(i["detail"], ensure_ascii=False))}/>')
+            cases.append(f'  <testcase classname={quoteattr("smoke." + str(r["asset"]))} '
+                         f'name={quoteattr(str(i["check"]))}>{status}</testcase>')
     path.write_text(
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         f'<testsuite name="carla-asset-smoke" tests="{len(cases)}">\n'
         + "\n".join(cases) + "\n</testsuite>\n", encoding="utf-8")
+    return path

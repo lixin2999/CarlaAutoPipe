@@ -9,6 +9,7 @@
 #include "FbxImporter.h"
 #include "TemplateHashGuard.h"
 #include "Engine/Engine.h"
+#include "Engine/EngineUtils.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/StaticMeshActor.h"
 #include "Engine/World.h"
@@ -183,19 +184,33 @@ bool UCarlaMapImporter::WaitForSceneReady(UWorld* World, float TimeoutSec)
 	FStreamableManager& Streamable = UAssetManager::GetStreamableManager();
 	const double Deadline = FPlatformTime::Seconds() + TimeoutSec;
 
-	// ★轮询保护：先等流式加载（FStreamableManager）完成，再等全部已注册
-	// PrimitiveComponent 的物理 Body 创建完毕，才放行 NavMesh 重建。
+	// ★轮询保护：先驱动并等待流式加载（FStreamableManager / ProcessAsyncLoading）
+	// 完成，再逐 Actor 检查目标世界内已注册 PrimitiveComponent 的物理 Body 是否
+	// 创建完毕，才放行 NavMesh 重建。主线程独占 Sleep 无法自然泵送异步加载，
+	// 必须显式 ProcessAsyncLoading 驱动；同时避免全局 TObjectIterator 性能开销。
 	while (FPlatformTime::Seconds() < Deadline)
 	{
+		ProcessAsyncLoading(true);                 // ★泵送异步加载管线，使等待可推进
+		Streamable.Tick();
 		const bool bLoading = Streamable.IsAsyncLoading();
 		bool bPhysicsPending = false;
-		for (TObjectIterator<UPrimitiveComponent> It; It && !bPhysicsPending; ++It)
+		for (FActorIterator It(World); It && !bPhysicsPending; ++It)
 		{
-			UPrimitiveComponent* Comp = *It;
-			if (Comp && Comp->IsRegistered() && Comp->GetWorld() == World &&
-				!Comp->BodyInstance.bPhysicsStateCreated)
+			AActor* Actor = *It;
+			if (!Actor)
 			{
-				bPhysicsPending = true;
+				continue;
+			}
+			TArray<UActorComponent*> Comps;
+			Actor->GetComponents(UPrimitiveComponent::StaticClass(), Comps);
+			for (UActorComponent* Comp : Comps)
+			{
+				UPrimitiveComponent* Prim = Cast<UPrimitiveComponent>(Comp);
+				if (Prim && Prim->IsRegistered() && !Prim->BodyInstance.bPhysicsStateCreated)
+				{
+					bPhysicsPending = true;
+					break;
+				}
 			}
 		}
 		if (!bLoading && !bPhysicsPending)

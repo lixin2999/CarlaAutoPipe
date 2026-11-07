@@ -80,7 +80,7 @@ def run_validate(asset_type: str, input_path: str, xodr_path: Optional[str] = No
     elif proc.returncode != 0:
         rpt.add_error("BLENDER_CRASH",
                       f"Blender 退出码 {proc.returncode}，且未生成报告文件",
-                      "查看 Blender stderr 输出排查脚本异常")
+                      "查看完整 stderr 输出排查脚本异常")
         rpt.details["stderr_tail"] = (proc.stderr or "")[-2000:]
         return rpt.finish(int(ExitCode.ENGINE_INTERNAL_ERROR))
     else:
@@ -89,9 +89,11 @@ def run_validate(asset_type: str, input_path: str, xodr_path: Optional[str] = No
                         "确认 blender_scripts/validate_mesh.py 未被改动")
 
     if proc.returncode == int(ExitCode.ASSET_VALIDATION_FAIL) and not rpt.has_error:
-        # Blender 侧判定有 ERROR 但报告缺项：兜底补一条
+        # Blender 侧判定有 ERROR 但报告缺项（解析失败/条目丢失）：兜底补一条，
+        # 并附 stderr 尾部供定位
         rpt.add_error("VEH_VALIDATE_FAIL", "Blender 校验判定存在致命错误",
                       "参考报告卡片逐条修复")
+        rpt.details["stderr_tail"] = (proc.stderr or "")[-2000:]
 
     code = ExitCode.ASSET_VALIDATION_FAIL if rpt.has_error else ExitCode.SUCCESS
     rpt.artifacts.append(out_json.as_posix())

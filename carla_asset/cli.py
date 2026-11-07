@@ -137,6 +137,7 @@ def _dispatch(args: argparse.Namespace) -> Report:
         rpt = Report(command="doctor")
         checks = settings.check()
         rpt.details["checks"] = checks
+        rpt.details["missing_count"] = sum(1 for c in checks if not c["ok"])
         for item in checks:
             if not item["ok"]:
                 rpt.add_warning(f"ENV_{item['key'].upper()}",
@@ -163,16 +164,24 @@ def main(argv: Optional[List[str]] = None) -> int:
     try:
         rpt = _dispatch(args)
     except KeyboardInterrupt:
+        # 用户主动取消（128+SIGINT 惯例），与引擎内部异常（2）语义区分
         print("已取消", file=sys.stderr)
-        return int(ExitCode.ENGINE_INTERNAL_ERROR)
+        return 130
     except Exception as e:                                # noqa: BLE001
-        rpt = Report(command=getattr(args, "command", "unknown"))
-        rpt.add_error("CLI_UNEXPECTED", f"未预期异常: {e!r}",
-                      "查看完整堆栈: 设置环境变量 CARLA_ASSET_DEBUG=1 后重试")
-        if __import__("os").environ.get("CARLA_ASSET_DEBUG"):
-            import traceback
-            traceback.print_exc()
-        rpt.finish(int(ExitCode.ENGINE_INTERNAL_ERROR))
+        from .config import SettingsError
+        if isinstance(e, SettingsError):
+            rpt = Report(command=getattr(args, "command", "unknown"))
+            rpt.add_error("ENV_SETTINGS_INVALID", str(e),
+                          "修复后重试，或设置 --settings 指定合法配置")
+            rpt.finish(int(ExitCode.ENVIRONMENT_ERROR))
+        else:
+            rpt = Report(command=getattr(args, "command", "unknown"))
+            rpt.add_error("CLI_UNEXPECTED", f"未预期异常: {e!r}",
+                          "查看完整堆栈: 设置环境变量 CARLA_ASSET_DEBUG=1 后重试")
+            if __import__("os").environ.get("CARLA_ASSET_DEBUG"):
+                import traceback
+                traceback.print_exc()
+            rpt.finish(int(ExitCode.ENGINE_INTERNAL_ERROR))
 
     _print_human(rpt)
     if getattr(args, "report", None):

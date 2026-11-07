@@ -17,7 +17,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import shutil
 import subprocess
@@ -28,12 +27,24 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from .checksum import file_sha256
 from .config import Settings
 from .constants import ExitCode
 from .pack import PKG_SCHEMA_VERSION, compute_fingerprint
 from .report import Report, environment_error
 
 INJECTED_DB_DIR = "_injected"
+
+
+def _build_fingerprint(content_root: Path, entries: List[str]) -> str:
+    """包内容指纹（★流式哈希，避免大资产整文件读入内存）。
+
+    记录与比对必须共用本函数（同一算法、同一数据来源），严禁在其他位置另算，
+    否则会出现指纹失真导致幂等跳过失效（V1.4 §4.5 / 既往缺陷复盘）。
+    """
+    return compute_fingerprint([
+        (rel, file_sha256(content_root.joinpath(*rel.split("/"))).hex())
+        for rel in entries])
 
 
 # ---------------------------------------------------------------------------
@@ -76,6 +87,11 @@ def read_package(pkg_path: Path, workdir: Path) -> Tuple[Path, Optional[dict]]:
         return pkg_path, None
     if name.endswith(".zip"):
         with zipfile.ZipFile(pkg_path) as zf:
+            # 安全解压：与 tar 同款预检，拒绝绝对路径与 .. 条目（防路径穿越）
+            for member in zf.namelist():
+                mp = Path(member)
+                if mp.is_absolute() or ".." in mp.parts:
+                    raise ValueError(f"包内存在非法路径条目: {member}")
             zf.extractall(workdir)
     elif name.endswith((".tar.gz", ".tgz")):
         with tarfile.open(pkg_path, "r:gz") as tf:
@@ -161,14 +177,34 @@ def inject_package(pkg_path: str, carla_root: Optional[str] = None,
             return rpt.finish(int(ExitCode.ASSET_VALIDATION_FAIL))
 
         pkg_name = (meta or {}).get("pkg_name") or pkg.stem.split(".")[0]
+        is_pak = pkg.name.lower().endswith(".pak")
+
+        # -- 统一指纹：pak 为 (文件名, 内容 sha256)，散装为逐文件内容摘要 -------
+        if is_pak:
+            entries = [content_root.name]
+            fingerprint = compute_fingerprint(
+                [(content_root.name, file_sha256(content_root).hex())])
+        else:
+            entries = _content_files(content_root)
+            fingerprint = _build_fingerprint(content_root, entries)
+            if meta and meta.get("fingerprint"):
+                fingerprint = meta["fingerprint"]
+
+        # -- 幂等：指纹一致且未 --force 则跳过（pak / 散装通路共用） -----------
+        db = _read_injected_db(carla, pkg_name)
+        if db and db.get("fingerprint") == fingerprint and not force:
+            rpt.add_info("INJECT_IDEMPOTENT_SKIP",
+                         f"包 {pkg_name} 指纹与已注入版本一致，跳过（--force 可强制重注）",
+                         "")
+            rpt.details["fingerprint"] = fingerprint
+            return rpt.finish(int(ExitCode.SUCCESS))
 
         # -- pak 通路：直接放 Saved/Paks/ -----------------------------------
-        if isinstance(content_root, Path) and content_root.suffix.lower() == ".pak":
+        if is_pak:
             dest_dir = layout["paks"]
             dest_dir.mkdir(parents=True, exist_ok=True)
-            plan = [content_root.name]
             target = dest_dir / content_root.name
-            diff = compute_diff(plan, dest_dir)
+            diff = compute_diff(entries, dest_dir)
             rpt.details["mode"] = "pak"
             rpt.details["diff"] = diff
             backup = _backup_files(dest_dir, diff["overwritten"], pkg_name, settings, carla)
@@ -178,42 +214,52 @@ def inject_package(pkg_path: str, carla_root: Optional[str] = None,
                 _rollback(backup, dest_dir, rpt)
                 rpt.add_error("INJECT_FAIL", f"pak 复制失败: {e}", "检查目标目录写权限")
                 return rpt.finish(int(ExitCode.ENGINE_INTERNAL_ERROR))
-            _record_injected(carla, pkg_name,
-                             compute_fingerprint([(content_root.name, "pak")]))
+            _record_injected(carla, pkg_name, fingerprint)   # 与上方比对值同源同算法
             rpt.artifacts.append(target.as_posix())
-            return rpt.finish(int(ExitCode.SUCCESS))
-
-        # -- 幂等：指纹一致且未 --force 则跳过 --------------------------------
-        entries = _content_files(content_root)
-        fingerprint = compute_fingerprint([
-            (rel, hashlib.sha256(
-                content_root.joinpath(*rel.split("/")).read_bytes()).hexdigest())
-            for rel in entries])   # 逐文件内容摘要，内容变更可被幂等感知
-        if meta and meta.get("fingerprint"):
-            fingerprint = meta["fingerprint"]
-        db = _read_injected_db(carla, pkg_name)
-        if db and db.get("fingerprint") == fingerprint and not force:
-            rpt.add_info("INJECT_IDEMPOTENT_SKIP",
-                         f"包 {pkg_name} 指纹与已注入版本一致，跳过（--force 可强制重注）",
-                         "")
             rpt.details["fingerprint"] = fingerprint
+            rpt.asset_name = pkg_name
             return rpt.finish(int(ExitCode.SUCCESS))
 
         # -- Linux 官方通路：Import/ + ImportAssets.sh ------------------------
         if (pkg.name.lower().endswith((".tar.gz", ".tgz"))
                 and layout["import_sh"].is_file()):
+            # 注入前快照将被覆盖的目标文件（ImportAssets.sh 解压至 Content/ 同名项），
+            # 失败时可回滚；tar 包内条目带 <pkg>/ 前缀，剥除后与 Content 相对路径对齐
+            rel_entries = [e.split("/", 1)[1] for e in entries]
+            backup = None
+            if layout["content"] is not None:
+                diff = compute_diff(rel_entries, layout["content"])
+                rpt.details["diff"] = {k: len(v) for k, v in diff.items()}
+                backup = _backup_files(layout["content"], diff["overwritten"],
+                                       pkg_name, settings, carla)
             layout["import"].mkdir(parents=True, exist_ok=True)
             shutil.copy2(pkg, layout["import"] / pkg.name)
-            proc = subprocess.run(["bash", str(layout["import_sh"])],
-                                  capture_output=True, text=True,
-                                  timeout=settings.import_timeout_sec,
-                                  cwd=str(carla))
+            try:
+                proc = subprocess.run(["bash", str(layout["import_sh"])],
+                                      capture_output=True, text=True,
+                                      timeout=settings.import_timeout_sec,
+                                      cwd=str(carla))
+            except subprocess.TimeoutExpired:
+                if rollback_on_fail:
+                    _rollback(backup, layout["content"] or carla, rpt)
+                rpt.add_error("IMPORT_SH_TIMEOUT",
+                              f"ImportAssets.sh 超时（>{settings.import_timeout_sec}s）",
+                              "调大 import_timeout_sec；Windows 运行机请改用 zip 通路")
+                return rpt.finish(int(ExitCode.ENGINE_INTERNAL_ERROR))
+            except OSError as e:
+                rpt.add_error("ENV_BASH_MISSING",
+                              f"无法启动 bash 执行 ImportAssets.sh: {e}",
+                              "Linux 运行端需 bash 环境；Windows 运行机请改用 zip 通路")
+                return rpt.finish(int(ExitCode.ENVIRONMENT_ERROR))
             if proc.returncode != 0:
+                if rollback_on_fail:
+                    _rollback(backup, layout["content"] or carla, rpt)
+                else:
+                    rpt.add_info("ROLLBACK_SKIPPED", "未启用 --rollback-on-fail，快照保留",
+                                 f"快照位置: {(backup.as_posix() if backup else '无')}")
                 rpt.add_error("IMPORT_SH_FAIL",
                               f"ImportAssets.sh 退出码 {proc.returncode}",
                               proc.stderr[-500:] if proc.stderr else "查看脚本输出")
-                if rollback_on_fail:
-                    _rollback(None, carla, rpt)
                 return rpt.finish(int(ExitCode.ENGINE_INTERNAL_ERROR))
             rpt.details["mode"] = "import_sh"
         else:

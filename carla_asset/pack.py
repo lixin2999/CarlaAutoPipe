@@ -26,6 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
+from .checksum import file_sha256
 from .config import Settings
 from .constants import ExitCode
 from .report import Report, environment_error
@@ -42,12 +43,12 @@ def compute_fingerprint(files: List[tuple]) -> str:
 
 
 def collect_package_files(staging: Path) -> List[tuple]:
-    """收集暂存目录内 (posix相对路径, 文件sha256) 列表。"""
+    """收集暂存目录内 (posix相对路径, 文件sha256) 列表（★流式哈希，防大资产整文件驻内存）。"""
     out = []
     for p in sorted(staging.rglob("*")):
         if p.is_file():
-            digest = hashlib.sha256(p.read_bytes()).hexdigest()
-            out.append((p.relative_to(staging).as_posix(), digest))
+            out.append((p.relative_to(staging).as_posix(),
+                        file_sha256(p)))
     return out
 
 

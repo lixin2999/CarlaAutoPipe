@@ -81,10 +81,19 @@ def validate_vehicle(bpy, fbx_path: Path, manifest: dict):
         d = bbox_dims(mn, mx)
         dims_map[o.name] = (d, mn, mx)
         total_vol += bbox_volume(d)
+    if not dims_map:
+        issue("ERROR", "VEH_NO_BOUNDS", "无法计算网格包围盒", "检查模型数据", str(fbx_path))
+        return
 
     wheels = [name for name, (d, _, _) in dims_map.items()
               if is_wheel_candidate(d, bbox_volume(d), total_vol)]
     declared = int((manifest.get("vehicle") or {}).get("wheels", 4)) if manifest else 4
+    if declared not in (2, 4):
+        # Schema 已约束 wheels∈{2,4}；脚本单独调用时防切片/子集逻辑错乱
+        issue("ERROR", "VEH_WHEEL_DECLARED",
+              f"Manifest wheels={declared} 非法（仅支持 2 / 4）",
+              "修正 Manifest；六轮及以上特种车型暂不支持", str(fbx_path))
+        return
     if len(wheels) not in (2, 4):
         issue("ERROR", "VEH_WHEELS_NOT_SPLIT",
               f"通过盘状度+体积占比识别到 {len(wheels)} 个车轮候选，"
@@ -116,9 +125,10 @@ def validate_vehicle(bpy, fbx_path: Path, manifest: dict):
               str(fbx_path))
     else:
         names = {b.name for b in armatures[0].data.bones}
-        missing = [b for b in (SKELETON_BASE_BONE, *SKELETON_WHEEL_BONES[:declared - 2 + 2])
-                   if b not in names] if declared == 4 else \
-                  [b for b in (SKELETON_BASE_BONE, "FL_Wheel", "RL_Wheel") if b not in names]
+        # 四轮要求全部四轮骨骼；两轮与 geoalgo 象限子集一致（FL/RL）
+        required_wheels = (list(SKELETON_WHEEL_BONES) if declared == 4
+                           else ["FL_Wheel", "RL_Wheel"])
+        missing = [b for b in (SKELETON_BASE_BONE, *required_wheels) if b not in names]
         if missing:
             issue("ERROR", "VEH_BONES_MISSING",
                   f"骨骼缺失: {missing}（标准骨架: {list(SKELETON_ALL_BONES)}）",
@@ -206,8 +216,6 @@ def validate_map(bpy, fbx_path: Path, xodr_path: Path | None):
     # 悬空顶点/非流形提示
     dangling = 0
     for o in meshes:
-        if o.data and hasattr(o.data, "has_custom_normals"):
-            pass
         for poly in o.data.polygons:
             if poly.area <= 1e-9:
                 dangling += 1

@@ -30,8 +30,9 @@ private:
 	int32 ProcessVehicle(const FString& ManifestPath);
 	int32 ProcessMap(const FString& ManifestPath);
 
-	/** 写出引擎侧统一 JSON 报告（GUI/CI 消费）。 */
-	void WriteReportJson();
+	/** 写出引擎侧统一 JSON 报告（GUI/CI 消费）；exit_code 写入真实返回码 0/1/2/3，
+	    与进程退出码契约一致（V1.4 §5.1），避免 GUI/CI 把环境错误误读为校验失败。 */
+	void WriteReportJson(int32 RetCode);
 
 	// --- 命令行状态 ---
 	FString Mode;

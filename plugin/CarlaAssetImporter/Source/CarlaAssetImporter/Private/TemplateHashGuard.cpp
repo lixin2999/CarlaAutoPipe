@@ -213,7 +213,14 @@ bool FCarlaTemplateHashGuard::ComputeDirectoryDigest(const FString& DirPath, FSt
 		RelPaths.Add(Rel);
 		AbsByRel.Add(Rel, Abs);
 	}
-	RelPaths.Sort();
+	// ★大小写敏感码点序（与 Python entries.sort(key=e[0]) 严格对齐）：
+	// FString::Sort 默认operator<走 ESearchCase::IgnoreCase，若目录内文件名存在
+	// 大小写混合（如 Zebra.uasset vs apple.uasset）会导致两侧字节流顺序不一致，
+	// 卡点误报退出码 3。
+	RelPaths.Sort([](const FString& A, const FString& B)
+	{
+		return A.Compare(B, ESearchCase::CaseSensitive) < 0;
+	});
 
 	FCarlaSha256 Acc;
 	for (const FString& Rel : RelPaths)

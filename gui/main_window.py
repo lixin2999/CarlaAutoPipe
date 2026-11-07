@@ -19,8 +19,10 @@ from PyQt5.QtWidgets import (QFileDialog, QHBoxLayout, QHeaderView, QLabel,
                              QVBoxLayout, QWidget, QMessageBox, QPlainTextEdit,
                              QLineEdit, QCheckBox)
 
+from . import __version__
 from .confirm_dialog import ConfirmDiffDialog
 from .env_check import blocked_steps, env_status
+from .preview import preview_diff
 from .runner import CliRunner
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -127,7 +129,7 @@ class StepInputs(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("CARLA 资产自动化导入工具 V1.0.0")
+        self.setWindowTitle(f"CARLA 资产自动化导入工具 {__version__}")
         self.resize(1180, 760)
         self._runner: Optional[CliRunner] = None
         self._step_items: Dict[str, QTreeWidgetItem] = {}
@@ -241,12 +243,15 @@ class MainWindow(QMainWindow):
         if args is None:
             QMessageBox.warning(self, "参数不完整", "请填写该步骤所需参数（见输入框提示）")
             return
-        # 注入/覆盖类风险操作：先展示差异清单二次确认
+        # 注入/覆盖类风险操作：先展示差异清单二次确认（真实预览，只读不写目标）
         if args[0] == "inject":
+            diff = preview_diff(args[1])
+            if diff is None:
+                diff = {"added": ["（预览不可用：包解析失败或 CARLA_ROOT 未配置/不存在）"],
+                        "overwritten": []}
             if not ConfirmDiffDialog.confirm(
                     "注入确认 — 目标 CARLA 目录差异清单",
-                    {"added": ["（执行 CLI 预览获得）"],
-                     "overwritten": ["（注入前 CLI 将自动快照备份，可回滚）"]}, self):
+                    diff, self):
                 return
         self._start(args, step)
 

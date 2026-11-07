@@ -7,6 +7,8 @@ import tarfile
 import zipfile
 from pathlib import Path
 
+import pytest
+
 from carla_asset.constants import ExitCode
 from carla_asset.inject import (compute_diff, detect_target_layout,
                                 inject_package, read_package)
@@ -179,6 +181,30 @@ def test_inject_pak_channel(staged_content, fake_carla_root, make_settings):
     assert dest.is_file()
 
 
+def test_inject_pak_idempotent_skip_and_force(staged_content, fake_carla_root, make_settings):
+    """V1.0.1 回归：pak 通路指纹为内容哈希，二次注入幂等跳过，--force 重注。"""
+    settings = make_settings()
+    pak = staged_content.parent / "su7_content.pak"
+    pak.write_bytes(b"\x5A\x00\x00\x00fakepak")
+    rpt1 = inject_package(str(pak), carla_root=str(fake_carla_root), settings=settings)
+    assert rpt1.exit_code == int(ExitCode.SUCCESS), rpt1.issues
+    assert rpt1.details["fingerprint"]     # ★真实内容指纹，非 (名字, "pak") 占位
+
+    rpt2 = inject_package(str(pak), carla_root=str(fake_carla_root), settings=settings)
+    assert rpt2.exit_code == int(ExitCode.SUCCESS)
+    assert any(i.code == "INJECT_IDEMPOTENT_SKIP" for i in rpt2.issues)
+
+    rpt3 = inject_package(str(pak), carla_root=str(fake_carla_root),
+                          force=True, settings=settings)
+    assert rpt3.exit_code == int(ExitCode.SUCCESS)
+    assert not any(i.code == "INJECT_IDEMPOTENT_SKIP" for i in rpt3.issues)
+
+    # 内容变更 → 指纹变化 → 不得幂等跳过（记录与比对同算法）
+    pak.write_bytes(b"\x5A\x00\x00\x00CHANGED")
+    rpt4 = inject_package(str(pak), carla_root=str(fake_carla_root), settings=settings)
+    assert not any(i.code == "INJECT_IDEMPOTENT_SKIP" for i in rpt4.issues)
+
+
 def test_inject_missing_carla_root(staged_content, make_settings):
     settings, pkg = _pack_win(staged_content, make_settings)
     rpt = inject_package(str(pkg), carla_root=str(settings.report_dir) + "/nope",
@@ -214,6 +240,26 @@ def test_read_package_rejects_traversal(tmp_path):
         assert False, "应拒绝 .. 越界条目"
     except ValueError as e:
         assert "非法路径" in str(e)
+
+
+def test_read_package_rejects_zip_traversal(tmp_path):
+    """V1.0.1 回归：zip 与 tar 同款路径穿越预检（恶意包不得写出 workdir）。"""
+    pkg = tmp_path / "evil.zip"
+    with zipfile.ZipFile(pkg, "w") as zf:
+        zf.writestr("../escape.txt", "pwned")
+    with pytest.raises(ValueError, match="非法路径"):
+        read_package(pkg, tmp_path / "work")
+    assert not (tmp_path / "escape.txt").exists()
+
+
+def test_inject_zip_traversal_reports_corrupt(tmp_path, fake_carla_root, make_settings):
+    pkg = tmp_path / "evil.zip"
+    with zipfile.ZipFile(pkg, "w") as zf:
+        zf.writestr("../escape.txt", "pwned")
+    rpt = inject_package(str(pkg), carla_root=str(fake_carla_root),
+                         settings=make_settings())
+    assert rpt.exit_code == int(ExitCode.ASSET_VALIDATION_FAIL)
+    assert rpt.issues[0].code == "PKG_CORRUPT"
 
 
 def test_backup_files_noop_without_overwrites(make_settings):

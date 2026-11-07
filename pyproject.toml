@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "carla-asset-pipeline"
-version = "1.0.0"
+version = "1.0.1"
 description = "CARLA 车辆与地图资产自动化导入工具系统 CLI 核心"
 readme = "README.md"
 requires-python = ">=3.8"

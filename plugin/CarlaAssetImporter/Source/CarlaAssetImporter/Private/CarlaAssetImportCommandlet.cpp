@@ -113,7 +113,7 @@ int32 UCarlaAssetImportCommandlet::Main(const FString& Params)
 	{
 		RetCode = 1;
 	}
-	WriteReportJson();
+	WriteReportJson(RetCode);
 	UE_LOG(LogCarlaAssetImport, Log, TEXT("CarlaAssetImport finished: mode=%s code=%d issues=%d"),
 		*Mode, RetCode, Issues.Num());
 	return RetCode;
@@ -259,7 +259,7 @@ int32 UCarlaAssetImportCommandlet::ProcessMap(const FString& ManifestPath)
 	return 0;
 }
 
-void UCarlaAssetImportCommandlet::WriteReportJson()
+void UCarlaAssetImportCommandlet::WriteReportJson(int32 RetCode)
 {
 	if (ReportPath.IsEmpty())
 	{
@@ -267,7 +267,8 @@ void UCarlaAssetImportCommandlet::WriteReportJson()
 	}
 	TSharedPtr<FJsonObject> Root = MakeShared<FJsonObject>();
 	Root->SetStringField(TEXT("command"), FString::Printf(TEXT("build-%s"), *Mode));
-	Root->SetNumberField(TEXT("exit_code"), HasErrors() ? 1 : 0);
+	// ★真实退出码契约 0/1/2/3（而非 HasErrors 推断的 0/1），与进程返回值一致
+	Root->SetNumberField(TEXT("exit_code"), RetCode);
 	Root->SetStringField(TEXT("schema_version"), TEXT("1.0"));
 
 	TArray<TSharedPtr<FJsonValue>> IssueArr;
