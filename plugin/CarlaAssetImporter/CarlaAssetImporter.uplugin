@@ -1,0 +1,29 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0.0",
+	"FriendlyName": "CARLA Asset Importer",
+	"Description": "CARLA 车辆与地图资产自动化导入 Commandlet 插件：黄金模板复制、物理资产构建、蓝图改写、VehicleFactory 延迟编译事务队列注册、地图 NavMesh 分阶段生成。目标平台 CARLA 0.9.16 (UE 4.26)。",
+	"Category": "Carla",
+	"CreatedBy": "CarlaAutoPipe Team",
+	"EnabledByDefault": true,
+	"CanContainContent": false,
+	"IsBetaVersion": false,
+	"Modules": [
+		{
+			"Name": "CarlaAssetImporter",
+			"Type": "Editor",
+			"LoadingPhase": "Default",
+			"WhitelistTargets": [
+				"Editor",
+				"Program"
+			]
+		}
+	],
+	"Plugins": [
+		{
+			"Name": "FBXImporter",
+			"Enabled": true
+		}
+	]
+}

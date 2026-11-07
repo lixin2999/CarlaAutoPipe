@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "carla-asset-pipeline"
+version = "1.0.0"
+description = "CARLA 车辆与地图资产自动化导入工具系统 CLI 核心"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [{ name = "CarlaAutoPipe Team" }]
+keywords = ["carla", "ue4", "asset", "pipeline", "autonomous-driving"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: Microsoft :: Windows",
+    "Operating System :: POSIX :: Linux",
+]
+dependencies = [
+    "jsonschema>=4.0",
+]
+
+[project.optional-dependencies]
+gui = ["PyQt5>=5.15"]
+smoke = ["carla==0.9.16"]
+dev = ["pytest>=7.0", "pytest-cov"]
+
+[project.scripts]
+carla-asset = "carla_asset.cli:main"
+
+[project.gui-scripts]
+carla-asset-gui = "gui.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["carla_asset*", "gui*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"

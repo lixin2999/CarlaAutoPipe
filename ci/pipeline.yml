@@ -1,0 +1,152 @@
+# =============================================================================
+# CARLA 资产自动化导入流水线（设计文档 V1.4 §6.2 四 Stage 结构）
+#
+# 适用：GitLab CI / 兼容 stages 语法的 Runner；GitHub Actions 可参照逐 job 迁移。
+# 契约：所有步骤通过 carla-asset CLI 执行并以 --report JSON 归档结构化结果；
+#       退出码 0=SUCCESS 1=ASSET_VALIDATION_FAIL 2=ENGINE_INTERNAL_ERROR
+#       3=ENVIRONMENT_ERROR（非 0 即 Stage 失败）。
+#
+# 运行器要求（详见 docs/DEPLOYMENT.md §CI Agent）：
+#   - lint 阶段：仅需 Python 3.8+
+#   - build/package 阶段：Windows Runner + Blender + UE4.26（CARLA 源码环境）
+#   - smoke 阶段：装有 Release 版 CARLA 的运行机
+# =============================================================================
+
+stages:
+  - lint-validate
+  - build-host
+  - package
+  - inject-smoke
+
+variables:
+  PIP_INDEX_URL: "https://pypi.org/simple"
+  CARLA_ASSET_SETTINGS: "configs/settings.json"
+
+default:
+  before_script:
+    - python -m pip install --upgrade pip
+    - pip install -r requirements.txt
+    - pip install -e .          # 提供 carla-asset 控制台入口
+  artifacts:
+    when: always
+    expire_in: 2 weeks
+
+# -----------------------------------------------------------------------------
+# Stage 1: Lint & Validate —— L1 级合规检查（Manifest Schema + Blender 资产校验）
+# -----------------------------------------------------------------------------
+lint:
+  stage: lint-validate
+  tags: [python]
+  script:
+    - python -m compileall -q carla_asset blender_scripts gui
+    - pip install flake8
+    - python -m flake8 carla_asset gui --max-line-length=100 --extend-ignore=E203,W503
+    - python -m pytest tests -q
+  rules:
+    - when: always
+
+validate-vehicle-manifests:
+  stage: lint-validate
+  tags: [python]
+  script:
+    # Schema + 交叉一致性校验（不依赖 Blender，快速左移拦截清单错误）
+    - python -c "import glob; from carla_asset.manifest import validate_manifest; import sys; sys.exit(0 if all(validate_manifest(p, 'vehicle')[0] for p in glob.glob('manifests/vehicles/*.json')) else 1)"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - when: always
+
+validate-assets:
+  stage: lint-validate
+  tags: [blender, windows]
+  parallel:
+    matrix:
+      - FBX_INPUT: ["assets_inbox/vehicles/su7.fbx"]
+  script:
+    # L1 前置校验：单位/轴向/车轮分件/骨架/原点接地（退出码 1 = 资产不合规）
+    - carla-asset validate --type vehicle --input "$FBX_INPUT" --report reports/validate_$CI_COMMIT_SHORT_SHA.json
+  artifacts:
+    paths: [reports/]
+    when: always
+
+# -----------------------------------------------------------------------------
+# Stage 2: Build Host Execution —— UE Commandlet 资产构建与工厂注册
+# -----------------------------------------------------------------------------
+build-vehicle:
+  stage: build-host
+  tags: [ue426, windows]
+  needs: [validate-assets]
+  parallel:
+    matrix:
+      - MANIFEST: ["manifests/vehicles/su7.json"]
+  script:
+    # 黄金模板哈希绝对卡点在 Commandlet 内执行（不符退出码 3 直接失败）
+    - carla-asset build-vehicle --manifest "$MANIFEST" --batch-size 10 --report reports/build_vehicle.json
+  artifacts:
+    paths: [reports/]
+    when: always
+
+build-map:
+  stage: build-host
+  tags: [ue426, windows]
+  needs: [lint]
+  parallel:
+    matrix:
+      - MANIFEST: ["manifests/maps/town10.json"]
+  script:
+    - carla-asset build-map --manifest "$MANIFEST" --batch-size 5 --report reports/build_map.json
+  artifacts:
+    paths: [reports/]
+    when: always
+
+# -----------------------------------------------------------------------------
+# Stage 3: Package & Artifacts —— 按目标平台差异化打包（win=zip / linux=tar.gz）
+# -----------------------------------------------------------------------------
+package-win:
+  stage: package
+  tags: [python, windows]
+  needs: [build-vehicle]
+  script:
+    - carla-asset pack --pkg su7 --src output/Staged/Content/Carla --manifest manifests/vehicles/su7.json --platform win --format zip --report reports/pack_win.json
+  artifacts:
+    paths: [dist/*.zip, reports/]
+
+package-linux:
+  stage: package
+  tags: [python, windows]
+  needs: [build-vehicle]
+  script:
+    - carla-asset pack --pkg su7 --src output/Staged/Content/Carla --manifest manifests/vehicles/su7.json --platform linux --format zip --report reports/pack_linux.json
+  artifacts:
+    paths: [dist/*.tar.gz, reports/]
+
+# -----------------------------------------------------------------------------
+# Stage 4: Automated Smoke Test —— 注入运行机并执行自动化回归（任一失败即阻断）
+# -----------------------------------------------------------------------------
+inject-and-smoke-vehicle:
+  stage: inject-smoke
+  tags: [carla-runner, windows]
+  needs: [package-win]
+  script:
+    # 幂等注入：重复指纹自动跳过；失败自动回滚快照
+    - carla-asset inject --pkg dist/su7_win.zip --rollback-on-fail --report reports/inject.json
+    # 冒烟八项：检索/属性/颜色/落地/驱动/转向/雷达/生态（单项 FAIL 即退出码 1）
+    - carla-asset smoke --type vehicle --name xiaomi.su7 --report reports/smoke_vehicle.json
+  after_script:
+    # 无论成败都归档 junit，供流水线趋势图
+    - python -c "import glob,shutil; [shutil.copy(f,'reports_junit/') for f in glob.glob('reports/*.xml')]" || true
+  artifacts:
+    paths: [reports/, reports_junit/]
+    when: always
+    reports:
+      junit: reports_junit/*.xml
+
+inject-and-smoke-map:
+  stage: inject-smoke
+  tags: [carla-runner, windows]
+  needs: [package-win]
+  script:
+    - carla-asset inject --pkg dist/town10_win.zip --rollback-on-fail --report reports/inject_map.json
+    - carla-asset smoke --type map --name Town10 --report reports/smoke_map.json
+  artifacts:
+    paths: [reports/]
+    when: always

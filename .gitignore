@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+.pytest_cache/
+.venv/
+venv/
+
+# 产出物
+out/
+Dist/
+reports/
+*.report.json
+
+# 本地配置与快照
+configs/settings.json
+_backup/
+
+# IDE
+.vscode/
+.idea/
+
+# UE 中间产物
+plugin/CarlaAssetImporter/Intermediate/
+plugin/CarlaAssetImporter/Binaries/
+
+# 文档
+docs/

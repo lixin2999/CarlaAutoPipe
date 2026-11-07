@@ -1,0 +1,89 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://carlaautopipe/schemas/vehicle.schema.json",
+  "title": "CARLA Vehicle Asset Manifest",
+  "type": "object",
+  "required": ["target_carla", "vehicle", "registration", "golden_template_checksum"],
+  "additionalProperties": false,
+  "properties": {
+    "target_carla": {
+      "type": "string",
+      "enum": ["0.9.16"],
+      "description": "目标 CARLA 版本，本工具定位为 0.9.x 系列"
+    },
+    "vehicle": {
+      "type": "object",
+      "required": ["make", "model", "class", "generation", "wheels", "base_type", "mesh", "physics_asset"],
+      "additionalProperties": false,
+      "properties": {
+        "make": { "type": "string", "pattern": "^[A-Za-z0-9_]+$", "description": "品牌，注入蓝图库时强制小写" },
+        "model": { "type": "string", "pattern": "^[A-Za-z0-9_]+$", "description": "车型，注入蓝图库时强制小写" },
+        "class": { "type": "string", "enum": ["car", "truck", "van", "motorcycle", "bicycle"] },
+        "generation": { "type": "integer", "minimum": 1, "maximum": 3 },
+        "wheels": { "type": "integer", "enum": [2, 4], "description": "红线：暂不支持 6 轮及以上多轴车型" },
+        "base_type": { "type": "string", "enum": ["car", "truck", "van", "motorcycle", "bicycle"] },
+        "mesh": {
+          "type": "object",
+          "required": ["unit", "forward_axis", "up_axis"],
+          "additionalProperties": false,
+          "properties": {
+            "unit": { "type": "string", "enum": ["cm"] },
+            "forward_axis": { "type": "string", "enum": ["+X"] },
+            "up_axis": { "type": "string", "enum": ["+Z"] },
+            "fbx_path": { "type": "string", "description": "原始 FBX 路径（可选，validate/rig 命令可显式传入）" }
+          }
+        },
+        "physics_asset": {
+          "type": "object",
+          "required": ["body_type", "wheel_primitive", "wheel_physics_type", "generate_hit_events"],
+          "additionalProperties": false,
+          "properties": {
+            "body_type": { "type": "string", "enum": ["SingleConvexHull"] },
+            "wheel_primitive": { "type": "string", "enum": ["Sphere"] },
+            "wheel_physics_type": { "type": "string", "enum": ["Kinematic"] },
+            "generate_hit_events": { "type": "boolean" },
+            "shape_radius_m": { "type": "number", "exclusiveMinimum": 0, "description": "车轮球形碰撞体半径（米），注入时转换为厘米" },
+            "mass_kg": { "type": "number", "exclusiveMinimum": 0, "description": "整车质量（千克）" },
+            "center_of_mass": {
+              "type": "object",
+              "required": ["x", "y", "z"],
+              "properties": {
+                "x": { "type": "number" }, "y": { "type": "number" }, "z": { "type": "number" }
+              }
+            }
+          }
+        },
+        "colors": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["r", "g", "b", "a"],
+            "additionalProperties": false,
+            "properties": {
+              "r": { "type": "integer", "minimum": 0, "maximum": 255 },
+              "g": { "type": "integer", "minimum": 0, "maximum": 255 },
+              "b": { "type": "integer", "minimum": 0, "maximum": 255 },
+              "a": { "type": "integer", "minimum": 0, "maximum": 255 }
+            }
+          }
+        }
+      }
+    },
+    "registration": {
+      "type": "object",
+      "required": ["vehicle_factory_path", "blueprint_parent", "skip_factory"],
+      "additionalProperties": false,
+      "properties": {
+        "vehicle_factory_path": { "type": "string", "minLength": 1 },
+        "blueprint_parent": { "type": "string", "const": "BaseVehiclePawn", "description": "红线：车辆蓝图父类必须为 BaseVehiclePawn" },
+        "skip_factory": { "type": "boolean", "description": "true 时启用降级通道 B（按路径直接加载）" }
+      }
+    },
+    "golden_template_checksum": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "黄金模板目录 SHA-256，Commandlet 复制前绝对卡点校验"
+    }
+  }
+}

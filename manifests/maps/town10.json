@@ -1,0 +1,24 @@
+{
+  "target_carla": "0.9.16",
+  "map": {
+    "map_name": "Town10",
+    "track": "standard",
+    "xodr_path": "raw/maps/town10/Town10.xodr",
+    "terrain_fbx_path": "raw/maps/town10/Town10.fbx",
+    "texture_dir": "raw/maps/town10/textures",
+    "mesh": {
+      "unit": "cm",
+      "forward_axis": "+X",
+      "up_axis": "+Z"
+    },
+    "navmesh_settings": {
+      "enable_vehicle_nav": true,
+      "enable_pedestrian_nav": true,
+      "agent_radius_cm": 30,
+      "agent_height_cm": 180,
+      "max_climb_cm": 30
+    },
+    "material_adapt": true,
+    "simple_collision": false
+  }
+}

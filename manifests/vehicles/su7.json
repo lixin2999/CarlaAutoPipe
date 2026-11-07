@@ -1,0 +1,36 @@
+{
+  "target_carla": "0.9.16",
+  "vehicle": {
+    "make": "xiaomi",
+    "model": "su7",
+    "class": "car",
+    "generation": 1,
+    "wheels": 4,
+    "base_type": "car",
+    "mesh": {
+      "unit": "cm",
+      "forward_axis": "+X",
+      "up_axis": "+Z",
+      "fbx_path": "raw/vehicles/su7/su7.fbx"
+    },
+    "physics_asset": {
+      "body_type": "SingleConvexHull",
+      "wheel_primitive": "Sphere",
+      "wheel_physics_type": "Kinematic",
+      "generate_hit_events": true,
+      "shape_radius_m": 0.35,
+      "mass_kg": 1900,
+      "center_of_mass": { "x": 0.0, "y": 0.0, "z": 0.55 }
+    },
+    "colors": [
+      { "r": 255, "g": 255, "b": 255, "a": 255 },
+      { "r": 10, "g": 10, "b": 10, "a": 255 }
+    ]
+  },
+  "registration": {
+    "vehicle_factory_path": "/Game/Carla/Blueprints/Vehicles/VehicleFactory.VehicleFactory",
+    "blueprint_parent": "BaseVehiclePawn",
+    "skip_factory": false
+  },
+  "golden_template_checksum": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+}

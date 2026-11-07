@@ -1,0 +1,13 @@
+{
+  "$comment": "复制为 settings.json 并按本机环境修改；亦可用环境变量覆盖: CARLA_ASSET_BLENDER / CARLA_ASSET_UE_CMD / CARLA_ASSET_UPROJECT / CARLA_ASSET_CARLA_ROOT / CARLA_ASSET_TEMPLATE_DIR",
+  "blender_exe": "C:/Program Files/Blender Foundation/Blender 3.6/blender.exe",
+  "ue_cmd": "D:/CARLA/Unreal/Engine/Windows/Engine/Binaries/Win64/UE4Editor-Cmd.exe",
+  "uproject": "D:/CARLA/Carla/Unreal/CarlaUE4/CarlaUE4.uproject",
+  "carla_root": "D:/CARLA/Carla/bin/Linux/CarlaUE4",
+  "golden_template_dir": "D:/CARLA/Carla/Unreal/CarlaUE4/Content/Carla/Blueprints/Vehicles/_Template",
+  "manifest_dir": "manifests",
+  "report_dir": "reports",
+  "package_dir": "Dist",
+  "backup_dir": "_backup",
+  "import_timeout_sec": 1800
+}
